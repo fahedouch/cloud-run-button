@@ -260,6 +260,11 @@ func run(c *cli.Context) error {
 		return fmt.Errorf("failed to push image to %s: %+v", image, err)
 	}
 
+	requireAuth := false
+	if appFile.RequireAuth != nil {
+		requireAuth = *appFile.RequireAuth
+	}
+
 	serviceLabel := highlight(serviceName)
 	fmt.Println(infoPrefix + " FYI, running the following command:")
 	cmdColor.Printf("\tgcloud beta run deploy %s", parameter(serviceName))
@@ -274,12 +279,16 @@ func run(c *cli.Context) error {
 	cmdColor.Println("\\")
 	cmdColor.Printf("\t  --memory=%s", parameter(defaultRunMemory))
 	cmdColor.Println("\\")
-	cmdColor.Printf("\t  --allow-unauthenticated\n")
+	if requireAuth {
+		cmdColor.Printf("\t  --no-allow-unauthenticated\n")
+	} else {
+		cmdColor.Printf("\t  --allow-unauthenticated\n")
+	}
 
 	end = logProgress(fmt.Sprintf("Deploying service %s to Cloud Run...", serviceLabel),
 		fmt.Sprintf("Successfully deployed service %s to Cloud Run.", serviceLabel),
 		"Failed deploying the application to Cloud Run.")
-	url, err := deploy(project, serviceName, image, region, envs)
+	url, err := deploy(project, serviceName, image, region, envs, requireAuth)
 	end(err == nil)
 	if err != nil {
 		return err
