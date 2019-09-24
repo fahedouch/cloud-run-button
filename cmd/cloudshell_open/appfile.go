@@ -15,11 +15,13 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"crypto/rand"
 
 	"github.com/fatih/color"
 
@@ -30,6 +32,7 @@ type env struct {
 	Description string `json:"description"`
 	Value       string `json:"value"`
 	Required    *bool  `json:"required"`
+	Generator   string `json:"generator"`
 }
 
 type appFile struct {
@@ -114,16 +117,26 @@ func promptEnv(list map[string]env) ([]string, error) {
 	// opposed to random order we do here.
 	for k, e := range list {
 		var resp string
-		if err := survey.AskOne(&survey.Input{
-			Message: fmt.Sprintf("Value of %s environment variable (%s)",
-				color.CyanString(k),
-				color.HiBlackString(e.Description)),
-			Default: e.Value,
-		}, &resp,
-			survey.WithValidator(survey.Required),
-			surveyIconOpts,
-		); err != nil {
-			return nil, fmt.Errorf("failed to get a response for environment variable %s", k)
+
+		if e.Generator == "secret" {
+			b := make([]byte, 64)
+			_, err := rand.Read(b)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate secret for %s - %v", k, err)
+			}
+			resp = base64.StdEncoding.EncodeToString(b)
+		} else {
+			if err := survey.AskOne(&survey.Input{
+				Message: fmt.Sprintf("Value of %s environment variable (%s)",
+					color.CyanString(k),
+					color.HiBlackString(e.Description)),
+				Default: e.Value,
+			}, &resp,
+				survey.WithValidator(survey.Required),
+				surveyIconOpts,
+			); err != nil {
+				return nil, fmt.Errorf("failed to get a response for environment variable %s", k)
+			}
 		}
 		out = append(out, k+"="+resp)
 	}
