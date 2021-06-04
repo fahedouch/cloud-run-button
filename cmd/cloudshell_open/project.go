@@ -42,7 +42,9 @@ func listProjects() ([]string, error) {
 	var out []string
 	if err := client.Projects.List().PageSize(1000).Pages(context.TODO(), func(resp *cloudresourcemanager.ListProjectsResponse) error {
 		for _, p := range resp.Projects {
-			out = append(out, p.ProjectId)
+			if p.LifecycleState == "ACTIVE" {
+				out = append(out, p.ProjectId)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -82,11 +84,10 @@ func confirmProject(project string) (bool, error) {
 func promptMultipleProjects(projects []string) (string, error) {
 	var p string
 	if err := survey.AskOne(&survey.Select{
-		Message: "Choose a project to deploy this application:",
+		Message: "Choose a project or press ctrl-c to create a new project:",
 		Options: projects,
 	}, &p,
 		surveyIconOpts,
-		survey.WithValidator(survey.Required),
 	); err != nil {
 		return p, fmt.Errorf("could not choose a project: %+v", err)
 	}

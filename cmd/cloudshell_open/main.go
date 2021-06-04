@@ -20,6 +20,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/AlecAivazis/survey/v2"
+	"github.com/GoogleCloudPlatform/cloud-run-button/cmd/instrumentless"
+	"google.golang.org/api/transport"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,16 +34,19 @@ import (
 )
 
 const (
-	flRepoURL   = "repo_url"
-	flGitBranch = "git_branch"
-	flSubDir    = "dir"
-	flPage      = "page"
-	flContext   = "context"
+	flRepoURL       = "repo_url"
+	flGitBranch     = "git_branch"
+	flSubDir        = "dir"
+	flPage          = "page"
+	flForceNewClone = "force_new_clone"
+	flContext       = "context"
 
 	reauthCredentialsWaitTimeout     = time.Minute * 2
 	reauthCredentialsPollingInterval = time.Second
 
-	projectCreateURL = "https://console.cloud.google.com/cloud-resource-manager"
+	billingCreateURL    = "https://console.cloud.google.com/billing/create"
+	trygcpURL           = "https://console.cloud.google.com/trygcp"
+	instrumentlessEvent = "crbutton"
 )
 
 var (
@@ -70,6 +76,7 @@ func init() {
 	flags.StringVar(&opts.context, flContext, "", "(optional) arbitrary context")
 
 	_ = flags.String(flPage, "", "ignored")
+	_ = flags.Bool(flForceNewClone, false, "ignored")
 }
 func main() {
 	usage := flags.Usage
@@ -149,6 +156,13 @@ func run(opts runOpts) error {
 		fmt.Sprintf("Cloned git repository %s.", highlight(repo)),
 		fmt.Sprintf("Failed to clone git repository %s", highlight(repo)))
 	cloneDir, err := handleRepo(repo)
+	if trusted && os.Getenv("SKIP_CLONE_REPORTING") == "" {
+		// TODO(ahmetb) had to introduce SKIP_CLONE_REPORTING env var here
+		// to skip connecting to :8998 while testing locally if this var is set.
+		if err := signalRepoCloneStatus(err == nil); err != nil {
+			return err
+		}
+	}
 	end(err == nil)
 	if err != nil {
 		return err
@@ -181,13 +195,13 @@ func run(opts runOpts) error {
 
 	project := os.Getenv("GOOGLE_CLOUD_PROJECT")
 
-	if project == "" {
+	for project == "" {
 		var projects []string
 
 		for len(projects) == 0 {
-			end = logProgress("Retrieving your GCP projects...",
-				"Queried list of your GCP projects",
-				"Failed to retrieve your GCP projects.",
+			end = logProgress("Retrieving your projects...",
+				"Queried list of your projects",
+				"Failed to retrieve your projects.",
 			)
 			projects, err = listProjects()
 			end(err == nil)
@@ -196,14 +210,7 @@ func run(opts runOpts) error {
 			}
 
 			if len(projects) == 0 {
-				fmt.Print(errorPrefix+" "+
-					warningLabel.Sprint("You don't have any GCP projects to deploy into!")+
-					"\n  1. Visit "+linkLabel.Sprint(projectCreateURL),
-					"\n  2. Create a new GCP project with a billing account",
-					"\n  3. Once you're done, press "+parameterLabel.Sprint("Enter")+" to continue: ")
-				if _, err := bufio.NewReader(os.Stdin).ReadBytes('\n'); err != nil {
-					return err
-				}
+				fmt.Print(errorPrefix + " " + warningLabel.Sprint("You don't have any projects to deploy into."))
 			}
 		}
 
@@ -214,19 +221,51 @@ func run(opts runOpts) error {
 
 		project, err = promptProject(projects)
 		if err != nil {
-			return err
+			fmt.Println(errorPrefix + " " + warningLabel.Sprint("You need to create a project"))
+			err := promptInstrumentless()
+			if err != nil {
+				return err
+			}
 		}
 	}
 
 	if err := waitForBilling(project, func(p string) error {
-		fmt.Print(errorPrefix+" "+
-			warningLabel.Sprint("GCP project you chose does not have an active billing account!")+
-			"\n  1. Visit "+linkLabel.Sprint(projectCreateURL),
-			"\n  2. Associate a billing account for project "+parameterLabel.Sprint(p),
-			"\n  3. Once you're done, press "+parameterLabel.Sprint("Enter")+" to continue: ")
+		projectLabel := color.New(color.Bold, color.FgHiCyan).Sprint(project)
+
+		fmt.Println(fmt.Sprintf(errorPrefix+" Project %s does not have an active billing account!", projectLabel))
+
+		billingAccounts, err := billingAccounts()
+		if err != nil {
+			return fmt.Errorf("could not get billing accounts: %v", err)
+		}
+
+		useExisting := false
+
+		if len(billingAccounts) > 0 {
+			useExisting, err = prompUseExistingBillingAccount(project)
+			if err != nil {
+				return err
+			}
+		}
+
+		if !useExisting {
+			err := promptInstrumentless()
+			if err != nil {
+				return err
+			}
+		}
+
+		fmt.Println(infoPrefix + " Link the billing account to the project:" +
+			"\n  " + linkLabel.Sprintf("https://console.cloud.google.com/billing?project=%s", project))
+
+		fmt.Println(questionPrefix + " " + "Once you're done, press " + parameterLabel.Sprint("Enter") + " to continue: ")
+
 		if _, err := bufio.NewReader(os.Stdin).ReadBytes('\n'); err != nil {
 			return err
 		}
+
+		// TODO(jamesward) automatically set billing account on project
+
 		return nil
 	}); err != nil {
 		return err
@@ -365,11 +404,18 @@ func run(opts runOpts) error {
 		}
 	}
 
+	deployCommand := "\tgcloud run deploy %s"
+
+	// TODO remove when --use-http2 graduates to GA
+	if appFile.Options.HTTP2 != nil && *appFile.Options.HTTP2 == true {
+		deployCommand = "\tgcloud beta run deploy %s"
+	}
+
 	optionsFlags := optionsToFlags(appFile.Options)
 
 	serviceLabel := highlight(serviceName)
 	fmt.Println(infoPrefix + " FYI, running the following command:")
-	cmdColor.Printf("\tgcloud run deploy %s", parameter(serviceName))
+	cmdColor.Printf(deployCommand, parameter(serviceName))
 	cmdColor.Println("\\")
 	cmdColor.Printf("\t  --project=%s", parameter(project))
 	cmdColor.Println("\\")
@@ -402,6 +448,8 @@ func run(opts runOpts) error {
 	if err != nil {
 		return err
 	}
+
+	hookEnvs = append(hookEnvs, fmt.Sprintf("SERVICE_URL=%s", url))
 
 	if existingService == nil {
 		err = runScripts(appDir, appFile.Hooks.PostCreate.Commands, hookEnvs)
@@ -438,6 +486,14 @@ func optionsToFlags(options options) []string {
 	if options.CPU != "" {
 		cpuSetting := fmt.Sprintf("--cpu=%s", options.CPU)
 		flags = append(flags, cpuSetting)
+	}
+
+	if options.HTTP2 != nil {
+		if *options.HTTP2 == false {
+			flags = append(flags, "--no-use-http2")
+		} else {
+			flags = append(flags, "--use-http2")
+		}
 	}
 
 	return flags
@@ -522,4 +578,70 @@ func isSubPath(a, b string) (bool, error) {
 		return false, fmt.Errorf("failed to calculate relative path: %v", err)
 	}
 	return !strings.HasPrefix(v, ".."+string(os.PathSeparator)), nil
+}
+
+func instrumentlessCoupon() (*instrumentless.Coupon, error) {
+	ctx := context.TODO()
+
+	creds, err := transport.Creds(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("could not get user credentials: %v", err)
+	}
+
+	token, err := creds.TokenSource.Token()
+	if err != nil {
+		return nil, fmt.Errorf("could not get an auth token: %v", err)
+	}
+
+	return instrumentless.GetCoupon(instrumentlessEvent, token.AccessToken)
+}
+
+func promptInstrumentless() error {
+	coupon, err := instrumentlessCoupon()
+
+	if err != nil || coupon == nil {
+		fmt.Println(infoPrefix + " Create a new billing account:")
+		fmt.Println("  " + linkLabel.Sprint(billingCreateURL))
+		fmt.Println(questionPrefix + " " + "Once you're done, press " + parameterLabel.Sprint("Enter") + " to continue: ")
+
+		if _, err := bufio.NewReader(os.Stdin).ReadBytes('\n'); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	code := ""
+	parts := strings.Split(coupon.URL, "code=")
+	if len(parts) == 2 {
+		code = parts[1]
+	} else {
+		return fmt.Errorf("could not get a coupon code")
+	}
+
+	fmt.Println(infoPrefix + " Open this page:\n  " + linkLabel.Sprint(trygcpURL))
+
+	fmt.Println(infoPrefix + " Use this coupon code:\n  " + code)
+
+	fmt.Println(questionPrefix + " Once you're done, press " + parameterLabel.Sprint("Enter") + " to continue: ")
+
+	if _, err := bufio.NewReader(os.Stdin).ReadBytes('\n'); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func prompUseExistingBillingAccount(project string) (bool, error) {
+	useExisting := false
+
+	projectLabel := color.New(color.Bold, color.FgHiCyan).Sprint(project)
+
+	if err := survey.AskOne(&survey.Confirm{
+		Default: false,
+		Message: fmt.Sprintf("Would you like to use an existing billing account with project %s?", projectLabel),
+	}, &useExisting, surveyIconOpts); err != nil {
+		return false, fmt.Errorf("could not prompt for confirmation %+v", err)
+	}
+	return useExisting, nil
 }

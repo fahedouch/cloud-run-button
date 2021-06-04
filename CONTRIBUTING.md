@@ -14,17 +14,18 @@
 1. To test the command:
     1. [Enable the cloudresourcemanager API](https://console.developers.google.com/apis/api/cloudresourcemanager.googleapis.com/overview)
     1. [Enable the billing API](https://console.developers.google.com/apis/api/cloudbilling.googleapis.com/overview)
-    1. Create a Service Account with the *Cloud Run Admin*, *ServiceEnabler*, *Service Account User*, and *Storage Admin* roles
+    1. Create a Service Account with the *Cloud Run Admin*, *Service Usage Consumer*, *Service Account User*, and *Storage Admin* roles
     1. Download the JSON key
     1. Authenticate gcloud as the service account:
         ```
         export GOOGLE_APPLICATION_CREDENTIALS=PATH_TO_YOUR_SERVICE_ACCOUNT_KEY_FILE
         gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
         export TRUSTED_ENVIRONMENT=true
+        export SKIP_CLONE_REPORTING=true
         ```
     1. Run the button:
         ```
-        (cd /tmp; ./cloudshell_open --repo_url=https://github.com/GoogleCloudPlatform/cloud-run-hello.git; rm -rf cloud-run-hello)
+        (cd /tmp; rm -rf cloud-run-hello; ./cloudshell_open --repo_url=https://github.com/GoogleCloudPlatform/cloud-run-hello.git; rm -rf cloud-run-hello)
         ```
         Other `cloudshell_open` flags: `--git_branch`, `--dir`, `--context`
 
@@ -52,12 +53,20 @@
       -v $KEY_FILE:/root/user.json \
       -e GOOGLE_APPLICATION_CREDENTIALS=/root/user.json \
       -e TRUSTED_ENVIRONMENT=true \
+      -e SKIP_CLONE_REPORTING=true \
       --entrypoint=/bin/sh cloud-run-button -c \
       "gcloud auth activate-service-account --key-file=/root/user.json \
       --quiet && gcloud auth configure-docker --quiet && \
       /bin/cloudshell_open \
       --repo_url=https://github.com/GoogleCloudPlatform/cloud-run-hello.git"
     ```
+
+## Test Instrumentless
+
+Test getting a coupon from the instrumentless API:
+```
+go run ./cmd/instrumentless_test YOUR_EVENT $(gcloud auth print-access-token)
+```
 
 ## Contributor License Agreement
 

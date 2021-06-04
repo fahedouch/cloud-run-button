@@ -63,13 +63,18 @@ For example, a fully populated `app.json` file looks like this:
         },
         "APP_SECRET": {
             "generator": "secret"
+        },
+        "ORDERED_ENV": {
+            "description": "control the order env variables are prompted",
+            "order": 100
         }
     },
     "options": {
         "allow-unauthenticated": false,
         "memory": "512Mi",
         "cpu": "1",
-        "port": "80"
+        "port": 80,
+        "http2": false
     },
     "build": {
         "skip": false,
@@ -114,17 +119,21 @@ Reference:
   - `required`, _(optional, default: `true`)_ indicates if they user must provide
     a value for this variable.
   - `generator`, _(optional)_ use a generator for the value, currently only support `secret`
+  - `order`, _(optional)_ if specified, used to indicate the order in which the
+    variable is prompted to the user. If some variables specify this and some
+    don't, then the unspecified ones are prompted last.
 - `options`: _(optional)_ Options when deploying the service
   - `allow-unauthenticated`: _(optional, default: `true`)_ allow unauthenticated requests
   - `memory`: _(optional)_ memory for each instance
   - `cpu`: _(optional)_ cpu for each instance
   - `port`: _(optional)_ if your application doesn't respect the PORT environment
-    variable provided by Cloud Run, specify the port number it listens on.
+    variable provided by Cloud Run, specify the port number it listens on
+  - `http2`: _(optional)_ use http2 for the connection
 - `build`: _(optional)_ Build configuration
   - `skip`: _(optional, default: `false`)_ skips the built-in build methods (`docker build`, `Maven Jib`, and
  `buildpacks`), but still allows for `prebuild` and `postbuild` hooks to be run in order to build the container image
  manually
-  - `buildpacks`: _(optional)_ buildpacks config
+  - `buildpacks`: _(optional)_ buildpacks config (Note: Additional Buildpack config can be specified using a `project.toml` file. [See the spec for details](https://buildpacks.io/docs/reference/config/project-descriptor/).)
     - `builder`: _(optional, default: `gcr.io/buildpacks/builder:v1`)_ overrides the buildpack builder image
 - `hooks`: _(optional)_ Run commands in separate bash shells with the environment variables configured for the
   application and environment variables `GOOGLE_CLOUD_PROJECT` (Google Cloud project), `GOOGLE_CLOUD_REGION`
@@ -138,7 +147,7 @@ Reference:
     - `commands`: _(array of strings)_ The list of commands to run
   - `precreate`: _(optional)_ Runs the specified commands before the service has been created
     - `commands`: _(array of strings)_ The list of commands to run
-  - `postcreate`: _(optional)_ Runs the specified commands after the service has been created
+  - `postcreate`: _(optional)_ Runs the specified commands after the service has been created; the `SERVICE_URL` environment variable provides the URL of the deployed Cloud Run service
     - `commands`: _(array of strings)_ The list of commands to run
 
 ### Notes
